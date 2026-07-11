@@ -1,14 +1,13 @@
 // ─────────────────────────────────────────────────────────────
-// REEL RADAR — daily run.
-// Reads Active accounts → scrapes each → flags outliers →
-// dedupes against the queue → writes new rows for editors.
+// REEL RADAR — daily run (fast batched version).
+// Reads Active accounts → scrapes them in a few batched Apify runs →
+// flags outliers → dedupes against the queue → writes new rows.
 //
 // Run once with:  node src/index.js
-// (Railway cron triggers this daily; see README.)
 // ─────────────────────────────────────────────────────────────
 
 import { config, assertConfig } from './config.js';
-import { fetchAccountReels } from './providers/apify.js';
+import { fetchManyAccounts } from './providers/apify.js';
 import { findOutliers } from './outlier.js';
 import {
   getActiveAccounts,
@@ -46,37 +45,38 @@ export async function run() {
   const seen = await getExistingShortcodes();
   log(`${seen.size} reels already in the queue (will be skipped).`);
 
+  // ── One fast pass: all accounts scraped in a few batched runs. ──
+  log('Scraping all accounts (batched)...');
+  const scraped = await fetchManyAccounts(accounts.map((a) => a.handle));
+
   const newRows = [];
   let scanned = 0;
-  let errors = 0;
+  let flaggedTotal = 0;
 
   for (const account of accounts) {
+    const data = scraped.get(account.handle.replace(/^@/, '').trim()) || {
+      followerCount: 0,
+      reels: [],
+    };
+    const { medianViews, flagged } = findOutliers(data);
+    scanned += data.reels.length;
+    flaggedTotal += flagged.length;
+
     try {
-      const data = await fetchAccountReels(account.handle);
-      const { medianViews, flagged } = findOutliers(data);
-      scanned += data.reels.length;
-
       await updateAccountStats(account.id, data.followerCount, medianViews);
-
-      const fresh = flagged.filter((r) => !seen.has(r.shortcode));
-      for (const r of fresh) {
-        seen.add(r.shortcode); // guard against dupes within this run too
-        newRows.push({
-          ...r,
-          handle: account.handle,
-          model: account.model,
-          postedDate: toPostedDate(r.timestamp),
-        });
-      }
-
-      log(
-        `@${account.handle}: ${data.reels.length} reels, ` +
-        `${data.followerCount.toLocaleString()} followers, ` +
-        `${flagged.length} outliers (${fresh.length} new).`
-      );
     } catch (err) {
-      errors += 1;
-      log(`@${account.handle}: ERROR — ${err.message}`);
+      log(`@${account.handle}: could not update stats — ${err.message}`);
+    }
+
+    const fresh = flagged.filter((r) => !seen.has(r.shortcode));
+    for (const r of fresh) {
+      seen.add(r.shortcode);
+      newRows.push({
+        ...r,
+        handle: account.handle,
+        model: account.model,
+        postedDate: toPostedDate(r.timestamp),
+      });
     }
   }
 
@@ -85,10 +85,10 @@ export async function run() {
 
   log('──────────────────────────────');
   log(`Done. Scanned ${scanned} reels across ${accounts.length} accounts.`);
-  log(`${written} new outliers written to the queue. ${errors} account errors.`);
+  log(`${flaggedTotal} outliers found, ${written} new written to the queue.`);
 }
 
-// Run only when this file is executed directly (not when imported by the scheduler).
+// Run only when executed directly (not when imported by the scheduler).
 import { pathToFileURL } from 'url';
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   run().catch((err) => {
