@@ -27,10 +27,10 @@ export const config = {
   //     outperforms their audience size.
   //   • baselineRatio catches big accounts where 10x-followers is impossible,
   //     but a reel doing 8x *their own* median is a real breakout format.
-  recencyDays: num(process.env.RECENCY_DAYS, 21),
-  minViewsFloor: num(process.env.MIN_VIEWS_FLOOR, 50000),
-  followerRatioMin: num(process.env.FOLLOWER_RATIO_MIN, 10),
-  baselineRatioMin: num(process.env.BASELINE_RATIO_MIN, 8),
+  recencyDays: num(process.env.RECENCY_DAYS, 28),
+  minViewsFloor: num(process.env.MIN_VIEWS_FLOOR, 25000),
+  followerRatioMin: num(process.env.FOLLOWER_RATIO_MIN, 6),
+  baselineRatioMin: num(process.env.BASELINE_RATIO_MIN, 5),
 };
 
 export function assertConfig() {
