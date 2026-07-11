@@ -32,7 +32,16 @@ async function listAll(table, params = {}) {
   const records = [];
   let offset;
   do {
-    const qs = new URLSearchParams({ pageSize: '100', ...params });
+    const qs = new URLSearchParams();
+    qs.set('pageSize', '100');
+    for (const [key, value] of Object.entries(params)) {
+      if (Array.isArray(value)) {
+        // Airtable expects array params as key[]=a&key[]=b
+        for (const item of value) qs.append(`${key}[]`, item);
+      } else {
+        qs.set(key, value);
+      }
+    }
     if (offset) qs.set('offset', offset);
     const data = await airtableFetch(url(table, `?${qs}`));
     records.push(...data.records);
