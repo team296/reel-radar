@@ -1,0 +1,17 @@
+{
+  "name": "reel-radar",
+  "version": "1.0.0",
+  "description": "Daily Instagram outlier-reel finder. Scrapes a list of inspiration accounts, flags reels punching above their weight, and drops them into an Airtable queue for editors.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "cron": "node src/scheduler.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "node-cron": "^3.0.3"
+  }
+}
