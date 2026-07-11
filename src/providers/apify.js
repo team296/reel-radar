@@ -23,7 +23,7 @@
 //   }
 // ─────────────────────────────────────────────────────────────
 
-import { config } from './config.js';
+import { config } from '../config.js';
 
 const APIFY_BASE = 'https://api.apify.com/v2';
 
