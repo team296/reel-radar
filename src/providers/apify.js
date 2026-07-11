@@ -3,31 +3,22 @@
 //
 // This is the ONLY file that knows about Apify. Everything upstream
 // (outlier engine, Airtable writer) speaks the normalized shape below.
-// To switch to a different scraper (RapidAPI, HikerAPI, whatever),
-// you replace only this file — keep the same export + return shape.
+// To switch to a different scraper, you replace only this file.
 //
-// NORMALIZED RETURN SHAPE (the contract):
-//   {
-//     followerCount: number,          // account's current followers (0 if unknown)
-//     reels: [
-//       {
-//         shortcode: string,
-//         url: string,
-//         thumbnailUrl: string,
-//         views: number,
-//         caption: string,
-//         timestamp: string|Date,     // when the reel was posted
-//       },
-//       ...
-//     ]
-//   }
+// NORMALIZED SHAPE per account:
+//   { followerCount, reels: [{ shortcode, url, thumbnailUrl, views, caption, timestamp }] }
 // ─────────────────────────────────────────────────────────────
 
 import { config } from '../config.js';
 
 const APIFY_BASE = 'https://api.apify.com/v2';
 
-// Runs the actor and returns dataset items directly (run-sync-get-dataset-items).
+// How many accounts to scrape in a single Apify run. Batching many accounts
+// per run is what makes this fast. Kept modest so each run finishes well
+// inside Apify's synchronous time limit.
+const BATCH_SIZE = Number(process.env.BATCH_SIZE) || 15;
+
+// Runs the actor and returns dataset items directly.
 async function runActor(input) {
   const url =
     `${APIFY_BASE}/acts/${config.apify.actorId}/run-sync-get-dataset-items` +
@@ -46,92 +37,94 @@ async function runActor(input) {
   return res.json();
 }
 
-// ── Defensive field readers ────────────────────────────────────
-// Different actors label the same thing differently. Rather than break
-// when an actor tweaks a field name, we try the common aliases.
-// On the FIRST real run, check the logs against a known reel to confirm
-// views are being read correctly, and trim these lists if you like.
+// ── Defensive field readers (actors label things differently) ──
 const firstDefined = (obj, keys) => {
   for (const k of keys) {
     if (obj && obj[k] !== undefined && obj[k] !== null) return obj[k];
   }
   return undefined;
 };
-
 const readViews = (post) =>
-  Number(
-    firstDefined(post, [
-      'videoPlayCount',
-      'videoViewCount',
-      'playCount',
-      'viewsCount',
-      'views',
-    ]) || 0
-  );
-
+  Number(firstDefined(post, ['videoPlayCount', 'videoViewCount', 'playCount', 'viewsCount', 'views']) || 0);
 const readFollowers = (obj) =>
   Number(firstDefined(obj, ['followersCount', 'followers', 'followerCount']) || 0);
-
-const readShortcode = (post) =>
-  firstDefined(post, ['shortCode', 'shortcode', 'code']) || '';
-
-const readThumb = (post) =>
-  firstDefined(post, ['displayUrl', 'thumbnailUrl', 'imageUrl', 'thumbnail']) || '';
-
+const readShortcode = (post) => firstDefined(post, ['shortCode', 'shortcode', 'code']) || '';
+const readThumb = (post) => firstDefined(post, ['displayUrl', 'thumbnailUrl', 'imageUrl', 'thumbnail']) || '';
 const readCaption = (post) => {
   const c = firstDefined(post, ['caption', 'text', 'title']);
   if (typeof c === 'string') return c;
   if (c && typeof c.text === 'string') return c.text;
   return '';
 };
-
 const readTimestamp = (post) =>
   firstDefined(post, ['timestamp', 'takenAt', 'takenAtTimestamp', 'time']) || null;
+const readOwner = (post) => {
+  const name =
+    firstDefined(post, ['ownerUsername']) ||
+    (post.owner && firstDefined(post.owner, ['username'])) ||
+    (post.user && firstDefined(post.user, ['username'])) ||
+    '';
+  return String(name).toLowerCase();
+};
 
-// ── Main export ────────────────────────────────────────────────
-export async function fetchAccountReels(handle) {
-  // apify/instagram-scraper: "details" on a profile URL returns the profile
-  // object (with followersCount) plus latestPosts. We ask for posts on the
-  // /reels/ URL to get reel play counts reliably, and read followers from
-  // the owner data when present, falling back to a details pass if not.
-  const cleanHandle = handle.replace(/^@/, '').trim();
+const clean = (h) => h.replace(/^@/, '').trim();
+const toReel = (it) => ({
+  shortcode: readShortcode(it),
+  url: firstDefined(it, ['url']) || `https://www.instagram.com/reel/${readShortcode(it)}/`,
+  thumbnailUrl: readThumb(it),
+  views: readViews(it),
+  caption: readCaption(it),
+  timestamp: readTimestamp(it),
+});
 
-  const input = {
-    directUrls: [`https://www.instagram.com/${cleanHandle}/reels/`],
-    resultsType: 'posts',
-    resultsLimit: config.reelsPerAccount,
-    addParentData: true, // asks the actor to attach owner/profile data to posts
-  };
+// ── FAST PATH — scrape many accounts across a few batched runs. ──
+// Returns a Map: handle -> { followerCount, reels }.
+export async function fetchManyAccounts(handles) {
+  const cleaned = handles.map(clean).filter(Boolean);
+  const byOwner = new Map();
 
-  const items = await runActor(input);
+  for (let i = 0; i < cleaned.length; i += BATCH_SIZE) {
+    const chunk = cleaned.slice(i, i + BATCH_SIZE);
+    const input = {
+      directUrls: chunk.map((h) => `https://www.instagram.com/${h}/reels/`),
+      resultsType: 'posts',
+      resultsLimit: config.reelsPerAccount,
+      addParentData: true,
+    };
 
-  if (!Array.isArray(items) || items.length === 0) {
-    return { followerCount: 0, reels: [] };
-  }
+    let items;
+    try {
+      items = await runActor(input);
+    } catch (err) {
+      console.log(`  batch ${i / BATCH_SIZE + 1} failed: ${err.message}`);
+      continue; // one bad batch shouldn't sink the whole run
+    }
+    if (!Array.isArray(items)) continue;
 
-  // Follower count may ride along on the post's owner data.
-  let followerCount = 0;
-  for (const it of items) {
-    const owner = it.owner || it.user || it;
-    const f = readFollowers(owner) || readFollowers(it);
-    if (f) {
-      followerCount = f;
-      break;
+    for (const it of items) {
+      if (!readShortcode(it)) continue;
+      const owner = readOwner(it);
+      if (!owner) continue;
+      if (!byOwner.has(owner)) byOwner.set(owner, { followerCount: 0, reels: [] });
+      const bucket = byOwner.get(owner);
+      if (!bucket.followerCount) {
+        const f = readFollowers(it.owner || it.user || it) || readFollowers(it);
+        if (f) bucket.followerCount = f;
+      }
+      bucket.reels.push(toReel(it));
     }
   }
 
-  const reels = items
-    .filter((it) => readShortcode(it))
-    .map((it) => ({
-      shortcode: readShortcode(it),
-      url:
-        firstDefined(it, ['url']) ||
-        `https://www.instagram.com/reel/${readShortcode(it)}/`,
-      thumbnailUrl: readThumb(it),
-      views: readViews(it),
-      caption: readCaption(it),
-      timestamp: readTimestamp(it),
-    }));
+  // Map results back to every requested handle (empty if nothing came back).
+  const result = new Map();
+  for (const h of cleaned) {
+    result.set(h, byOwner.get(h.toLowerCase()) || { followerCount: 0, reels: [] });
+  }
+  return result;
+}
 
-  return { followerCount, reels };
+// ── Single-account version (kept for testing / fallback). ──
+export async function fetchAccountReels(handle) {
+  const map = await fetchManyAccounts([handle]);
+  return map.get(clean(handle)) || { followerCount: 0, reels: [] };
 }
