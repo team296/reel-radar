@@ -12,25 +12,17 @@ export const config = {
   airtable: {
     token: process.env.AIRTABLE_TOKEN,
     baseId: process.env.AIRTABLE_BASE_ID || 'appCyze40Y6jR4u1H',
-    // Tables are referenced by name — safe because names are stable.
     accountsTable: 'Inspiration Accounts',
     queueTable: 'Reel Queue',
   },
 
-  // How many recent reels to pull per account per run.
   reelsPerAccount: num(process.env.REELS_PER_ACCOUNT, 20),
 
-  // ── The outlier rules ──
-  // A reel is flagged only if it clears the FLOOR *and* satisfies at least
-  // one of the two ratio tests. Two ratios on purpose:
-  //   • followerRatio catches small/mid accounts whose reel massively
-  //     outperforms their audience size.
-  //   • baselineRatio catches big accounts where 10x-followers is impossible,
-  //     but a reel doing 8x *their own* median is a real breakout format.
+  // ── The outlier rules ── (10x on both tests)
   recencyDays: num(process.env.RECENCY_DAYS, 28),
   minViewsFloor: num(process.env.MIN_VIEWS_FLOOR, 25000),
-  followerRatioMin: num(process.env.FOLLOWER_RATIO_MIN, 6),
-  baselineRatioMin: num(process.env.BASELINE_RATIO_MIN, 5),
+  followerRatioMin: num(process.env.FOLLOWER_RATIO_MIN, 10),
+  baselineRatioMin: num(process.env.BASELINE_RATIO_MIN, 10),
 };
 
 export function assertConfig() {
