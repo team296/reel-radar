@@ -4,7 +4,7 @@
 // Two passes:
 //   1. PROFILE pass  — gets follower counts (reels URLs don't carry them).
 //   2. REELS pass    — gets recent reels + view counts.
-// Accounts that come back empty get one retry in a smaller batch.
+// A pause between batches keeps Instagram from throttling us.
 //
 // NORMALIZED SHAPE per account:
 //   { followerCount, reels: [{ shortcode, url, thumbnailUrl, views, caption, timestamp }] }
@@ -14,6 +14,9 @@ import { config } from '../config.js';
 
 const APIFY_BASE = 'https://api.apify.com/v2';
 const BATCH_SIZE = Number(process.env.BATCH_SIZE) || 10;
+const PAUSE_MS = Number(process.env.PAUSE_MS) || 4000; // wait between batches
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function runActor(input) {
   const url =
@@ -82,15 +85,17 @@ async function fetchFollowerCounts(handles) {
         resultsType: 'details',
         resultsLimit: 1,
       });
-      if (!Array.isArray(items)) continue;
-      for (const it of items) {
-        const name = readOwner(it);
-        const f = readFollowers(it);
-        if (name && f) followers.set(name, f);
+      if (Array.isArray(items)) {
+        for (const it of items) {
+          const name = readOwner(it);
+          const f = readFollowers(it);
+          if (name && f) followers.set(name, f);
+        }
       }
     } catch (err) {
       console.log(`  profile batch ${Math.floor(i / BATCH_SIZE) + 1} failed: ${err.message}`);
     }
+    if (i + BATCH_SIZE < handles.length) await sleep(PAUSE_MS);
   }
   return followers;
 }
@@ -110,16 +115,19 @@ async function fetchReelsFor(handles) {
       });
     } catch (err) {
       console.log(`  reels batch ${Math.floor(i / BATCH_SIZE) + 1} failed: ${err.message}`);
+      if (i + BATCH_SIZE < handles.length) await sleep(PAUSE_MS);
       continue;
     }
-    if (!Array.isArray(items)) continue;
-    for (const it of items) {
-      if (!readShortcode(it)) continue;
-      const owner = readOwner(it);
-      if (!owner) continue;
-      if (!byOwner.has(owner)) byOwner.set(owner, []);
-      byOwner.get(owner).push(toReel(it));
+    if (Array.isArray(items)) {
+      for (const it of items) {
+        if (!readShortcode(it)) continue;
+        const owner = readOwner(it);
+        if (!owner) continue;
+        if (!byOwner.has(owner)) byOwner.set(owner, []);
+        byOwner.get(owner).push(toReel(it));
+      }
     }
+    if (i + BATCH_SIZE < handles.length) await sleep(PAUSE_MS);
   }
   return byOwner;
 }
@@ -135,10 +143,10 @@ export async function fetchManyAccounts(handles) {
   console.log(`  pass 2/2: reels...`);
   const reelsByOwner = await fetchReelsFor(cleaned);
 
-  // Retry anything that came back with no reels — often just a flaky batch.
   const missed = cleaned.filter((h) => !reelsByOwner.has(h.toLowerCase()));
   if (missed.length) {
     console.log(`  retrying ${missed.length} accounts that returned nothing...`);
+    await sleep(PAUSE_MS);
     const retry = await fetchReelsFor(missed);
     for (const [k, v] of retry) reelsByOwner.set(k, v);
     const stillMissed = missed.filter((h) => !reelsByOwner.has(h.toLowerCase()));
