@@ -1,29 +1,27 @@
-name: Reel Radar daily run
+name: IG Tracker daily run
 
 on:
   schedule:
-    - cron: "0 6 * * *"
+    - cron: "0 7 * * *"
   workflow_dispatch:
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - name: Get the code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install
+      - name: Install dependencies
         run: npm install
 
-      - name: Run Reel Radar
+      - name: Run IG Tracker
         run: npm start
         env:
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
-          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
-          APIFY_ACTOR_ID: ${{ secrets.APIFY_ACTOR_ID }}
