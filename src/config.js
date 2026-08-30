@@ -1,36 +1,25 @@
-// ─────────────────────────────────────────────────────────────
-// Central config. Everything tunable lives here or in .env.
-// ─────────────────────────────────────────────────────────────
+module.exports = {
+  APIFY_TOKEN: process.env.APIFY_TOKEN,
+  AIRTABLE_TOKEN: process.env.AIRTABLE_TOKEN,
 
-const num = (v, fallback) => (v === undefined || v === '' ? fallback : Number(v));
+  // Reel Radar base — same one you already use
+  AIRTABLE_BASE_ID: 'appCyze40Y6jR4u1H',
 
-export const config = {
-  apify: {
-    token: process.env.APIFY_TOKEN,
-    actorId: process.env.APIFY_ACTOR_ID || 'apify~instagram-scraper',
-  },
-  airtable: {
-    token: process.env.AIRTABLE_TOKEN,
-    baseId: process.env.AIRTABLE_BASE_ID || 'appCyze40Y6jR4u1H',
-    accountsTable: 'Inspiration Accounts',
-    queueTable: 'Reel Queue',
-  },
+  // The posting table inside Reel Radar base
+  POSTING_TABLE_NAME: 'posting',
+  SOURCE_VIEWS: ['iphone farm', 'iremote'],
 
-  reelsPerAccount: num(process.env.REELS_PER_ACCOUNT, 20),
+  // These tables are created automatically on first run
+  SNAPSHOTS_TABLE_NAME: 'Daily Snapshots',
+  FLAGGED_POSTS_TABLE_NAME: 'Flagged Posts',
 
-  // ── The outlier rules ── (10x on both tests)
-  recencyDays: num(process.env.RECENCY_DAYS, 28),
-  minViewsFloor: num(process.env.MIN_VIEWS_FLOOR, 25000),
-  followerRatioMin: num(process.env.FOLLOWER_RATIO_MIN, 10),
-  baselineRatioMin: num(process.env.BASELINE_RATIO_MIN, 10),
+  // Scraping settings
+  APIFY_ACTOR: 'apify~instagram-profile-scraper',
+  BATCH_SIZE: 5,
+  BATCH_PAUSE_MS: 4000,
+  POLL_INTERVAL_MS: 3000,
+  POLL_MAX_ATTEMPTS: 40,
+
+  // Flagging threshold
+  VIEWS_FLAG_THRESHOLD: 10000,
 };
-
-export function assertConfig() {
-  const missing = [];
-  if (!config.apify.token) missing.push('APIFY_TOKEN');
-  if (!config.airtable.token) missing.push('AIRTABLE_TOKEN');
-  if (!config.airtable.baseId) missing.push('AIRTABLE_BASE_ID');
-  if (missing.length) {
-    throw new Error(`Missing required env vars: ${missing.join(', ')}`);
-  }
-}
