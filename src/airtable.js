@@ -1,124 +1,93 @@
-// ─────────────────────────────────────────────────────────────
-// AIRTABLE LAYER — talks to the "Reel Radar" base over the REST API.
-// Uses field NAMES (stable) rather than IDs for readability.
-// ─────────────────────────────────────────────────────────────
+const fetch = require('node-fetch');
+const { AIRTABLE_TOKEN, AIRTABLE_BASE_ID } = require('./config');
 
-import { config } from './config.js';
+const BASE_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}`;
 
-const API = 'https://api.airtable.com/v0';
-
-function url(table, suffix = '') {
-  return `${API}/${config.airtable.baseId}/${encodeURIComponent(table)}${suffix}`;
-}
-
-function headers() {
-  return {
-    Authorization: `Bearer ${config.airtable.token}`,
-    'Content-Type': 'application/json',
-  };
-}
-
-async function airtableFetch(fullUrl, options = {}) {
-  const res = await fetch(fullUrl, { ...options, headers: headers() });
+async function atFetch(path, opts = {}) {
+  const url = path.startsWith('https://') ? path : `${BASE_URL}/${path}`;
+  const res = await fetch(url, {
+    ...opts,
+    headers: {
+      Authorization: `Bearer ${AIRTABLE_TOKEN}`,
+      'Content-Type': 'application/json',
+      ...(opts.headers || {}),
+    },
+  });
+  const body = await res.json();
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Airtable ${res.status}: ${body.slice(0, 300)}`);
+    throw new Error(`Airtable ${res.status}: ${JSON.stringify(body.error || body)}`);
   }
-  return res.json();
+  return body;
 }
 
-// Pull every record from a table, following pagination.
-async function listAll(table, params = {}) {
+async function listAll(tableIdOrName, params = {}) {
   const records = [];
-  let offset;
+  let offset = null;
   do {
     const qs = new URLSearchParams();
-    qs.set('pageSize', '100');
-    for (const [key, value] of Object.entries(params)) {
-      if (Array.isArray(value)) {
-        // Airtable expects array params as key[]=a&key[]=b
-        for (const item of value) qs.append(`${key}[]`, item);
-      } else {
-        qs.set(key, value);
-      }
-    }
     if (offset) qs.set('offset', offset);
-    const data = await airtableFetch(url(table, `?${qs}`));
+    for (const [k, v] of Object.entries(params)) {
+      if (Array.isArray(v)) v.forEach(i => qs.append(`${k}[]`, i));
+      else qs.set(k, v);
+    }
+    const data = await atFetch(`${encodeURIComponent(tableIdOrName)}?${qs}`);
     records.push(...data.records);
-    offset = data.offset;
+    offset = data.offset || null;
   } while (offset);
   return records;
 }
 
-// Accounts marked Active, normalized for the pipeline.
-export async function getActiveAccounts() {
-  const records = await listAll(config.airtable.accountsTable, {
-    filterByFormula: '{Active}=1',
-  });
-  return records.map((r) => ({
-    id: r.id,
-    handle: (r.fields.Handle || '').trim(),
-    model: r.fields.Model || 'Unassigned',
-  })).filter((a) => a.handle);
+async function listTables() {
+  const data = await atFetch(`https://api.airtable.com/v0/meta/bases/${AIRTABLE_BASE_ID}/tables`);
+  return data.tables;
 }
 
-// Shortcodes already in the queue — so we never surface a reel twice.
-export async function getExistingShortcodes() {
-  const records = await listAll(config.airtable.queueTable, {
-    fields: ['Shortcode'],
+async function createTable(name, fields) {
+  const data = await fetch(`https://api.airtable.com/v0/meta/bases/${AIRTABLE_BASE_ID}/tables`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${AIRTABLE_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ name, fields }),
   });
-  return new Set(records.map((r) => r.fields.Shortcode).filter(Boolean));
+  const body = await data.json();
+  if (!data.ok) throw new Error(`Create table error: ${JSON.stringify(body)}`);
+  return body;
 }
 
-// Store the freshly scraped follower count + median back on the account row.
-export async function updateAccountStats(recordId, followerCount, medianViews) {
-  const today = new Date().toISOString().slice(0, 10);
-  await airtableFetch(url(config.airtable.accountsTable), {
-    method: 'PATCH',
-    body: JSON.stringify({
-      typecast: true,
-      records: [
-        {
-          id: recordId,
-          fields: {
-            'Follower Count': followerCount || 0,
-            'Median Views': medianViews || 0,
-            'Last Scraped': today,
-          },
-        },
-      ],
-    }),
-  });
-}
-
-// Write new outlier reels into the queue (batched, max 10 per request).
-export async function writeReelRows(rows) {
-  const today = new Date().toISOString().slice(0, 10);
-  let written = 0;
-
-  for (let i = 0; i < rows.length; i += 10) {
-    const batch = rows.slice(i, i + 10).map((r) => ({
-      fields: {
-        Shortcode: r.shortcode,
-        'Reel URL': r.url,
-        Thumbnail: r.thumbnailUrl ? [{ url: r.thumbnailUrl }] : undefined,
-        'Source Handle': r.handle,
-        Model: r.model,
-        Views: r.views,
-        'Follower Ratio': r.followerRatio,
-        'Baseline Ratio': r.baselineRatio,
-        'Posted Date': r.postedDate || undefined,
-        'Surfaced Date': today,
-        Caption: r.caption || '',
-        Status: 'New',
-      },
-    }));
-
-    await airtableFetch(url(config.airtable.queueTable), {
+async function createRecords(tableIdOrName, records) {
+  const results = [];
+  for (let i = 0; i < records.length; i += 10) {
+    const chunk = records.slice(i, i + 10);
+    const data = await atFetch(encodeURIComponent(tableIdOrName), {
       method: 'POST',
-      body: JSON.stringify({ typecast: true, records: batch }),
+      body: JSON.stringify({ records: chunk.map(f => ({ fields: f })), typecast: true }),
     });
-    written += batch.length;
+    results.push(...data.records);
   }
-  return written;
+  return results;
 }
+
+async function upsert(tableIdOrName, keyField, keyValue, fields) {
+  const qs = new URLSearchParams({ filterByFormula: `{${keyField}} = "${keyValue}"`, maxRecords: 1 });
+  const data = await atFetch(`${encodeURIComponent(tableIdOrName)}?${qs}`);
+  if (data.records.length > 0) {
+    const recId = data.records[0].id;
+    return atFetch(`${encodeURIComponent(tableIdOrName)}/${recId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ fields, typecast: true }),
+    });
+  } else {
+    return atFetch(encodeURIComponent(tableIdOrName), {
+      method: 'POST',
+      body: JSON.stringify({ records: [{ fields }], typecast: true }),
+    });
+  }
+}
+
+async function listView(tableIdOrName, viewName) {
+  return listAll(tableIdOrName, { view: viewName });
+}
+
+module.exports = { listAll, listTables, createTable, createRecords, upsert, listView, atFetch };
