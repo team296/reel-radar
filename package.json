@@ -1,17 +1,12 @@
 {
-  "name": "reel-radar",
+  "name": "ig-tracker",
   "version": "1.0.0",
-  "description": "Daily Instagram outlier-reel finder. Scrapes a list of inspiration accounts, flags reels punching above their weight, and drops them into an Airtable queue for editors.",
-  "type": "module",
+  "description": "Daily Instagram account tracker for CSO Management",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "cron": "node src/scheduler.js"
-  },
-  "engines": {
-    "node": ">=18"
+    "start": "node src/index.js"
   },
   "dependencies": {
-    "node-cron": "^3.0.3"
+    "node-fetch": "^2.7.0"
   }
 }
