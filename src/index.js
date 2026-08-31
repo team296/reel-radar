@@ -1,5 +1,5 @@
 const { ensureTables } = require('./setup');
-const { listView, listAll, createRecords, upsert } = require('./airtable');
+const { listView, listAll, createRecords, upsert, atFetch } = require('./airtable');
 const { scrapeProfiles, parseProfile } = require('./apify');
 const {
   POSTING_TABLE_NAME,
@@ -36,10 +36,10 @@ async function loadYesterdaySnapshots() {
 function dedupeAccounts(allAccounts) {
   const seen = new Set();
   const result = [];
-  for (const { username, source } of allAccounts) {
+  for (const { username, source, recordId } of allAccounts) {
     if (!username || seen.has(username)) continue;
     seen.add(username);
-    result.push({ username, source });
+    result.push({ username, source, recordId });
   }
   return result;
 }
@@ -52,6 +52,18 @@ async function alreadyFlagged(postUrl) {
     fields: ['Post ID'],
   });
   return records.length > 0;
+}
+
+async function updateTrialReels(recordId, followers) {
+  const value = followers >= 200 ? 'yes' : 'no';
+  try {
+    await atFetch(`${encodeURIComponent(POSTING_TABLE_NAME)}/${recordId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ fields: { 'trial reels enabled?': value }, typecast: true }),
+    });
+  } catch (e) {
+    console.error(`  ✗ Failed to update trial reels for ${recordId}: ${e.message}`);
+  }
 }
 
 async function main() {
@@ -68,7 +80,11 @@ async function main() {
       for (const r of records) {
         const username = r.fields['username'] || r.fields['Username'];
         if (username) {
-          allAccounts.push({ username: username.trim().replace('@', ''), source: viewName });
+          allAccounts.push({
+            username: username.trim().replace('@', ''),
+            source: viewName,
+            recordId: r.id,
+          });
         }
       }
     } catch (e) {
@@ -90,6 +106,7 @@ async function main() {
   const today = todayISO();
   let totalSnapshots = 0;
   let totalFlagged = 0;
+  let totalTrialUpdates = 0;
   let totalErrors = 0;
 
   const batches = [];
@@ -122,6 +139,7 @@ async function main() {
     for (const profile of profiles) {
       const acct = batch.find(a => a.username === profile.username);
       const source = acct ? acct.source : 'unknown';
+      const recordId = acct ? acct.recordId : null;
       const prevFollowers = yesterdayMap[profile.username] || 0;
       const delta = prevFollowers > 0 ? profile.followers - prevFollowers : 0;
 
@@ -135,6 +153,12 @@ async function main() {
         'Posts Last 24h': profile.postsLast24h,
         'Flagged Posts Count': profile.flaggedPosts.length,
       });
+
+      // Update trial reels enabled field
+      if (recordId) {
+        await updateTrialReels(recordId, profile.followers);
+        totalTrialUpdates++;
+      }
 
       for (const post of profile.flaggedPosts) {
         const alreadyDone = await alreadyFlagged(post.url);
@@ -186,10 +210,11 @@ async function main() {
 
   console.log(`
 === Done ===
-  Snapshots written : ${totalSnapshots}
-  Posts flagged     : ${totalFlagged}
-  Errors            : ${totalErrors}
-  Run time          : ${new Date().toISOString()}
+  Snapshots written  : ${totalSnapshots}
+  Trial reels updated: ${totalTrialUpdates}
+  Posts flagged      : ${totalFlagged}
+  Errors             : ${totalErrors}
+  Run time           : ${new Date().toISOString()}
 `);
 }
 
