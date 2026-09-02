@@ -2,9 +2,9 @@ const fetch = require('node-fetch');
 const { AIRTABLE_TOKEN, AIRTABLE_BASE_ID } = require('./config');
 
 const BASE_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}`;
+const META_URL = `https://api.airtable.com/v0/meta/bases/${AIRTABLE_BASE_ID}`;
 
-async function atFetch(path, opts = {}) {
-  const url = path.startsWith('https://') ? path : `${BASE_URL}/${path}`;
+async function request(url, opts = {}) {
   const res = await fetch(url, {
     ...opts,
     headers: {
@@ -20,6 +20,12 @@ async function atFetch(path, opts = {}) {
   return body;
 }
 
+async function atFetch(path, opts = {}) {
+  const url = path.startsWith('https://') ? path : `${BASE_URL}/${path}`;
+  return request(url, opts);
+}
+
+// List all records from a table, following pagination.
 async function listAll(tableIdOrName, params = {}) {
   const records = [];
   let offset = null;
@@ -38,22 +44,23 @@ async function listAll(tableIdOrName, params = {}) {
 }
 
 async function listTables() {
-  const data = await atFetch(`https://api.airtable.com/v0/meta/bases/${AIRTABLE_BASE_ID}/tables`);
+  const data = await request(`${META_URL}/tables`);
   return data.tables;
 }
 
 async function createTable(name, fields) {
-  const data = await fetch(`https://api.airtable.com/v0/meta/bases/${AIRTABLE_BASE_ID}/tables`, {
+  return request(`${META_URL}/tables`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${AIRTABLE_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
     body: JSON.stringify({ name, fields }),
   });
-  const body = await data.json();
-  if (!data.ok) throw new Error(`Create table error: ${JSON.stringify(body)}`);
-  return body;
+}
+
+// Add a single new column to an existing table.
+async function createField(tableId, field) {
+  return request(`${META_URL}/tables/${tableId}/fields`, {
+    method: 'POST',
+    body: JSON.stringify(field),
+  });
 }
 
 async function createRecords(tableIdOrName, records) {
@@ -69,8 +76,12 @@ async function createRecords(tableIdOrName, records) {
   return results;
 }
 
+// Update the row matching keyField=keyValue, or create it if absent.
 async function upsert(tableIdOrName, keyField, keyValue, fields) {
-  const qs = new URLSearchParams({ filterByFormula: `{${keyField}} = "${keyValue}"`, maxRecords: 1 });
+  const qs = new URLSearchParams({
+    filterByFormula: `{${keyField}} = "${keyValue}"`,
+    maxRecords: 1,
+  });
   const data = await atFetch(`${encodeURIComponent(tableIdOrName)}?${qs}`);
   if (data.records.length > 0) {
     const recId = data.records[0].id;
@@ -78,16 +89,24 @@ async function upsert(tableIdOrName, keyField, keyValue, fields) {
       method: 'PATCH',
       body: JSON.stringify({ fields, typecast: true }),
     });
-  } else {
-    return atFetch(encodeURIComponent(tableIdOrName), {
-      method: 'POST',
-      body: JSON.stringify({ records: [{ fields }], typecast: true }),
-    });
   }
+  return atFetch(encodeURIComponent(tableIdOrName), {
+    method: 'POST',
+    body: JSON.stringify({ records: [{ fields }], typecast: true }),
+  });
 }
 
 async function listView(tableIdOrName, viewName) {
   return listAll(tableIdOrName, { view: viewName });
 }
 
-module.exports = { listAll, listTables, createTable, createRecords, upsert, listView, atFetch };
+module.exports = {
+  atFetch,
+  listAll,
+  listTables,
+  createTable,
+  createField,
+  createRecords,
+  upsert,
+  listView,
+};
