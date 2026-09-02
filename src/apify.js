@@ -1,5 +1,5 @@
 const fetch = require('node-fetch');
-const { APIFY_TOKEN, APIFY_ACTOR, POLL_INTERVAL_MS, POLL_MAX_ATTEMPTS } = require('./config');
+const { APIFY_TOKEN, APIFY_ACTOR, POLL_INTERVAL_MS, POLL_MAX_ATTEMPTS, VIEWS_FLAG_THRESHOLD } = require('./config');
 
 const BASE = 'https://api.apify.com/v2';
 
@@ -8,7 +8,7 @@ function sleep(ms) {
 }
 
 async function scrapeProfiles(usernames) {
-  console.log(`  → Apify: scraping ${usernames.join(', ')}`);
+  console.log(`  -> Apify: scraping ${usernames.join(', ')}`);
 
   const runRes = await fetch(
     `${BASE}/acts/${APIFY_ACTOR}/runs?token=${APIFY_TOKEN}`,
@@ -17,7 +17,7 @@ async function scrapeProfiles(usernames) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         usernames,
-        resultsLimit: 12,
+        resultsLimit: 30,
       }),
     }
   );
@@ -44,31 +44,30 @@ async function scrapeProfiles(usernames) {
   }
 
   const itemsRes = await fetch(
-    `${BASE}/actor-runs/${runId}/dataset/items?token=${APIFY_TOKEN}&limit=50`
+    `${BASE}/actor-runs/${runId}/dataset/items?token=${APIFY_TOKEN}&limit=100`
   );
   const items = await itemsRes.json();
   return items;
 }
 
 function parseProfile(raw) {
-  const now = Date.now();
-  const cutoff = now - 24 * 60 * 60 * 1000;
-
   const latestPosts = raw.latestPosts || [];
 
-  const recentPosts = latestPosts.filter(p => {
-    const ts = p.timestamp ? new Date(p.timestamp).getTime() : 0;
-    return ts > cutoff;
-  });
+  // Total post count on the account (reliable, straight from the profile)
+  const postsTotal = raw.postsCount || 0;
 
+  // Total views across every post Apify returned for this account
+  const totalViews = latestPosts.reduce(
+    (sum, p) => sum + (p.videoViewCount || p.videoPlayCount || 0),
+    0
+  );
+
+  // Posts that crossed the view threshold
   const flaggedPosts = latestPosts
-    .filter(p => {
-      const ts = p.timestamp ? new Date(p.timestamp).getTime() : 0;
-      return ts > cutoff && (p.videoViewCount || 0) >= 10000;
-    })
+    .filter(p => (p.videoViewCount || p.videoPlayCount || 0) >= VIEWS_FLAG_THRESHOLD)
     .map(p => ({
       url: p.url || `https://instagram.com/p/${p.shortCode}`,
-      views: p.videoViewCount || 0,
+      views: p.videoViewCount || p.videoPlayCount || 0,
       likes: p.likesCount || 0,
       comments: p.commentsCount || 0,
       caption: (p.caption || '').slice(0, 200),
@@ -76,14 +75,13 @@ function parseProfile(raw) {
     }));
 
   return {
-    username: raw.username,
+    username: raw.username || '',
     followers: raw.followersCount || 0,
     following: raw.followsCount || 0,
-    postsTotal: raw.postsCount || 0,
-    postsLast24h: recentPosts.length,
+    postsTotal,
+    totalViews,
+    postsScraped: latestPosts.length,
     flaggedPosts,
-    biography: raw.biography || '',
-    verified: raw.isVerified || false,
   };
 }
 
