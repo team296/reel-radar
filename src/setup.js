@@ -1,8 +1,6 @@
 const { listTables, createTable, createField } = require('./airtable');
 const { SNAPSHOTS_TABLE_NAME, FLAGGED_POSTS_TABLE_NAME } = require('./config');
 
-// Desired schema. If the table is missing it gets created with all of these.
-// If it already exists, any field not present gets added.
 const SNAPSHOT_FIELDS = [
   { name: 'Snapshot ID', type: 'singleLineText' },
   { name: 'Username', type: 'singleLineText' },
@@ -10,11 +8,21 @@ const SNAPSHOT_FIELDS = [
   { name: 'Date', type: 'date', options: { dateFormat: { name: 'iso' } } },
   { name: 'Followers', type: 'number', options: { precision: 0 } },
   { name: 'Follower Delta', type: 'number', options: { precision: 0 } },
-  { name: 'Posts Total', type: 'number', options: { precision: 0 } },
-  { name: 'Posts Delta', type: 'number', options: { precision: 0 } },
+  // Reel-based figures. These replace the old grid-based Posts columns.
+  { name: 'Reels Tracked', type: 'number', options: { precision: 0 } },
+  { name: 'New Reels', type: 'number', options: { precision: 0 } },
   { name: 'Total Views', type: 'number', options: { precision: 0 } },
   { name: 'Views Delta', type: 'number', options: { precision: 0 } },
   { name: 'Flagged Posts Count', type: 'number', options: { precision: 0 } },
+  {
+    name: 'Scraped At',
+    type: 'dateTime',
+    options: {
+      dateFormat: { name: 'iso' },
+      timeFormat: { name: '24hour' },
+      timeZone: 'Europe/London',
+    },
+  },
 ];
 
 const FLAGGED_FIELDS = [
@@ -44,14 +52,13 @@ async function ensureTable(tableName, wantedFields, existingTables) {
   if (!existing) {
     console.log(`  Creating table: ${tableName}`);
     await createTable(tableName, wantedFields);
-    console.log(`  ok Created ${tableName}`);
     return;
   }
 
-  const haveNames = existing.fields.map(f => f.name.toLowerCase());
-  const missing = wantedFields.filter(f => !haveNames.includes(f.name.toLowerCase()));
+  const have = existing.fields.map(f => f.name.toLowerCase());
+  const missing = wantedFields.filter(f => !have.includes(f.name.toLowerCase()));
 
-  if (missing.length === 0) {
+  if (!missing.length) {
     console.log(`  ok ${tableName} up to date`);
     return;
   }
