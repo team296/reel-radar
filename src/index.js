@@ -11,6 +11,7 @@ const {
   RETRY_EMPTY,
   RETRY_PAUSE_MS,
   VIEWS_FLAG_THRESHOLD,
+  FLAG_WINDOW_HOURS,
 } = require('./config');
 
 const todayISO = () => new Date().toISOString().split('T')[0];
@@ -189,7 +190,15 @@ async function main() {
     const followerDelta = hasProfile && prev ? followers - prev.followers : 0;
     const viewsDelta = prev ? totalViews - prev.totalViews : 0;
 
-    const hits = reels.filter(r => r.views >= VIEWS_FLAG_THRESHOLD);
+    // Flag only reels that hit the view threshold AND went up inside the
+    // window. Both conditions, as specified: a big number on an old reel is
+    // not news.
+    const windowStart = Date.now() - FLAG_WINDOW_HOURS * 60 * 60 * 1000;
+    const hits = reels.filter(r =>
+      r.views >= VIEWS_FLAG_THRESHOLD &&
+      r.postedAt &&
+      new Date(r.postedAt).getTime() >= windowStart
+    );
 
     console.log(
       `  ${acct.username}: ${hasProfile ? followers : '?'} followers ` +
@@ -337,7 +346,7 @@ async function main() {
   Failed after retry : ${stats.empty}
   New reels posted   : ${newReels}
   Views gained today : ${dayViews.toLocaleString()}
-  Newly flagged      : ${stats.flagged} (>= ${VIEWS_FLAG_THRESHOLD.toLocaleString()} views)
+  Newly flagged      : ${stats.flagged} (>= ${VIEWS_FLAG_THRESHOLD.toLocaleString()} views within ${FLAG_WINDOW_HOURS}h)
   Finished           : ${new Date().toISOString()}
 `);
 }
