@@ -30,6 +30,8 @@ module.exports = {
   RETRY_EMPTY: true,
   RETRY_PAUSE_MS: 15000,
 
-  // A reel at or above this many views gets written to Flagged Posts.
-  VIEWS_FLAG_THRESHOLD: 1000,
+  // A reel gets written to Flagged Posts only if it hits this many views
+  // AND was posted within FLAG_WINDOW_HOURS. Both conditions must be true.
+  VIEWS_FLAG_THRESHOLD: 10000,
+  FLAG_WINDOW_HOURS: 24,
 };
