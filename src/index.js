@@ -18,36 +18,52 @@ function todayISO() {
   return new Date().toISOString().split('T')[0];
 }
 
-async function loadYesterdaySnapshots() {
-  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-  const filter = `{Date} = "${yesterday}"`;
+// Find the most recent snapshot for each account BEFORE today.
+// Using "most recent previous" instead of strictly yesterday means the
+// deltas still work if a day gets skipped (missed cron, failed run).
+async function loadPreviousSnapshots() {
+  const today = todayISO();
   const records = await listAll(SNAPSHOTS_TABLE_NAME, {
-    filterByFormula: filter,
-    fields: ['Username', 'Followers'],
+    filterByFormula: `IS_BEFORE({Date}, "${today}")`,
+    fields: ['Username', 'Date', 'Followers', 'Posts Total', 'Total Views'],
   });
+
   const map = {};
   for (const r of records) {
-    map[r.fields['Username']] = r.fields['Followers'] || 0;
+    const rawName = r.fields['Username'];
+    if (!rawName) continue;
+    const key = String(rawName).toLowerCase().trim();
+    const date = r.fields['Date'] || '';
+    // Keep only the latest-dated row per username
+    if (!map[key] || date > map[key].date) {
+      map[key] = {
+        date,
+        followers: r.fields['Followers'] || 0,
+        postsTotal: r.fields['Posts Total'] || 0,
+        totalViews: r.fields['Total Views'] || 0,
+      };
+    }
   }
-  console.log(`Loaded ${records.length} yesterday snapshots for delta calculation`);
+
+  console.log(`  Loaded ${records.length} previous rows, ${Object.keys(map).length} accounts with history`);
   return map;
 }
 
 function dedupeAccounts(allAccounts) {
   const seen = new Set();
   const result = [];
-  for (const { username, source, recordId } of allAccounts) {
-    if (!username || seen.has(username)) continue;
-    seen.add(username);
-    result.push({ username, source, recordId });
+  for (const acct of allAccounts) {
+    const key = acct.username.toLowerCase();
+    if (!acct.username || seen.has(key)) continue;
+    seen.add(key);
+    result.push(acct);
   }
   return result;
 }
 
 async function alreadyFlagged(postUrl) {
-  const filter = `AND({Post URL} = "${postUrl}", {Detected On} = "${todayISO()}")`;
   const records = await listAll(FLAGGED_POSTS_TABLE_NAME, {
-    filterByFormula: filter,
+    filterByFormula: `{Post URL} = "${postUrl}"`,
     maxRecords: 1,
     fields: ['Post ID'],
   });
@@ -61,13 +77,15 @@ async function updateTrialReels(recordId, followers) {
       method: 'PATCH',
       body: JSON.stringify({ fields: { 'trial reels enabled?': value }, typecast: true }),
     });
+    return true;
   } catch (e) {
-    console.error(`  ✗ Failed to update trial reels for ${recordId}: ${e.message}`);
+    console.error(`  x trial reels update failed (${recordId}): ${e.message}`);
+    return false;
   }
 }
 
 async function main() {
-  console.log(`\n=== IG Tracker — ${new Date().toISOString()} ===\n`);
+  console.log(`\n=== IG Tracker - ${new Date().toISOString()} ===\n`);
 
   await ensureTables();
 
@@ -81,33 +99,33 @@ async function main() {
         const username = r.fields['username'] || r.fields['Username'];
         if (username) {
           allAccounts.push({
-            username: username.trim().replace('@', ''),
+            username: String(username).trim().replace('@', ''),
             source: viewName,
             recordId: r.id,
           });
         }
       }
     } catch (e) {
-      console.error(`  ✗ Failed to load view "${viewName}": ${e.message}`);
+      console.error(`  x Failed to load view "${viewName}": ${e.message}`);
     }
   }
 
   const accounts = dedupeAccounts(allAccounts);
   console.log(`\nTotal unique accounts to scrape: ${accounts.length}`);
-
   if (accounts.length === 0) {
     console.log('No accounts found. Exiting.');
     return;
   }
 
-  console.log('\nLoading yesterday snapshots...');
-  const yesterdayMap = await loadYesterdaySnapshots();
+  console.log('\nLoading previous snapshots for deltas...');
+  const prevMap = await loadPreviousSnapshots();
 
   const today = todayISO();
   let totalSnapshots = 0;
   let totalFlagged = 0;
   let totalTrialUpdates = 0;
   let totalErrors = 0;
+  let dayViews = 0;
 
   const batches = [];
   for (let i = 0; i < accounts.length; i += BATCH_SIZE) {
@@ -124,10 +142,10 @@ async function main() {
     let profiles = [];
     try {
       const raw = await scrapeProfiles(usernames);
-      profiles = raw.map(parseProfile).filter(Boolean);
-      console.log(`  ✓ Got ${profiles.length}/${usernames.length} profiles`);
+      profiles = raw.map(parseProfile).filter(p => p.username);
+      console.log(`  ok Got ${profiles.length}/${usernames.length} profiles`);
     } catch (e) {
-      console.error(`  ✗ Batch failed: ${e.message}`);
+      console.error(`  x Batch failed: ${e.message}`);
       totalErrors += batch.length;
       if (bIdx < batches.length - 1) await sleep(BATCH_PAUSE_MS);
       continue;
@@ -137,11 +155,32 @@ async function main() {
     const flaggedRows = [];
 
     for (const profile of profiles) {
-      const acct = batch.find(a => a.username === profile.username);
+      const key = profile.username.toLowerCase();
+      const acct = batch.find(a => a.username.toLowerCase() === key);
       const source = acct ? acct.source : 'unknown';
       const recordId = acct ? acct.recordId : null;
-      const prevFollowers = yesterdayMap[profile.username] || 0;
-      const delta = prevFollowers > 0 ? profile.followers - prevFollowers : 0;
+
+      // Guard: if the scrape came back empty, skip rather than
+      // overwriting good data with zeros.
+      if (profile.followers === 0 && profile.postsTotal === 0) {
+        console.log(`  ! ${profile.username}: empty scrape, skipping`);
+        totalErrors++;
+        continue;
+      }
+
+      const prev = prevMap[key] || null;
+      const followerDelta = prev ? profile.followers - prev.followers : 0;
+      const postsDelta = prev ? profile.postsTotal - prev.postsTotal : 0;
+      const viewsDelta = prev ? profile.totalViews - prev.totalViews : 0;
+
+      dayViews += viewsDelta > 0 ? viewsDelta : 0;
+
+      console.log(
+        `  ${profile.username}: ${profile.followers} followers (${followerDelta >= 0 ? '+' : ''}${followerDelta}), ` +
+        `posts ${profile.postsTotal} (${postsDelta >= 0 ? '+' : ''}${postsDelta}), ` +
+        `views ${profile.totalViews} (${viewsDelta >= 0 ? '+' : ''}${viewsDelta})` +
+        `${prev ? '' : ' [no history yet]'}`
+      );
 
       snapshotRows.push({
         'Snapshot ID': `${profile.username}_${today}`,
@@ -149,33 +188,33 @@ async function main() {
         'Source': source,
         'Date': today,
         'Followers': profile.followers,
-        'Follower Delta': delta,
-        'Posts Last 24h': profile.postsLast24h,
+        'Follower Delta': followerDelta,
+        'Posts Total': profile.postsTotal,
+        'Posts Delta': postsDelta,
+        'Total Views': profile.totalViews,
+        'Views Delta': viewsDelta,
         'Flagged Posts Count': profile.flaggedPosts.length,
       });
 
-      // Update trial reels enabled field
       if (recordId) {
-        await updateTrialReels(recordId, profile.followers);
-        totalTrialUpdates++;
+        const ok = await updateTrialReels(recordId, profile.followers);
+        if (ok) totalTrialUpdates++;
       }
 
       for (const post of profile.flaggedPosts) {
-        const alreadyDone = await alreadyFlagged(post.url);
-        if (!alreadyDone) {
-          flaggedRows.push({
-            'Post ID': `${profile.username}_${post.url.split('/').pop()}_${today}`,
-            'Username': profile.username,
-            'Source': source,
-            'Post URL': post.url,
-            'Views': post.views,
-            'Likes': post.likes,
-            'Comments': post.comments,
-            'Caption': post.caption,
-            'Posted At': post.postedAt,
-            'Detected On': today,
-          });
-        }
+        if (await alreadyFlagged(post.url)) continue;
+        flaggedRows.push({
+          'Post ID': `${profile.username}_${post.url.split('/').filter(Boolean).pop()}`,
+          'Username': profile.username,
+          'Source': source,
+          'Post URL': post.url,
+          'Views': post.views,
+          'Likes': post.likes,
+          'Comments': post.comments,
+          'Caption': post.caption,
+          'Posted At': post.postedAt,
+          'Detected On': today,
+        });
       }
 
       totalFlagged += profile.flaggedPosts.length;
@@ -187,18 +226,18 @@ async function main() {
         for (const row of snapshotRows) {
           await upsert(SNAPSHOTS_TABLE_NAME, 'Snapshot ID', row['Snapshot ID'], row);
         }
-        console.log(`  ✓ Saved ${snapshotRows.length} snapshots`);
+        console.log(`  ok Saved ${snapshotRows.length} snapshots`);
       } catch (e) {
-        console.error(`  ✗ Snapshot write error: ${e.message}`);
+        console.error(`  x Snapshot write error: ${e.message}`);
       }
     }
 
     if (flaggedRows.length > 0) {
       try {
         await createRecords(FLAGGED_POSTS_TABLE_NAME, flaggedRows);
-        console.log(`  🚨 Flagged ${flaggedRows.length} posts (10k+ views)`);
+        console.log(`  !! Flagged ${flaggedRows.length} new posts (10k+ views)`);
       } catch (e) {
-        console.error(`  ✗ Flagged posts write error: ${e.message}`);
+        console.error(`  x Flagged posts write error: ${e.message}`);
       }
     }
 
@@ -210,11 +249,12 @@ async function main() {
 
   console.log(`
 === Done ===
-  Snapshots written  : ${totalSnapshots}
-  Trial reels updated: ${totalTrialUpdates}
-  Posts flagged      : ${totalFlagged}
-  Errors             : ${totalErrors}
-  Run time           : ${new Date().toISOString()}
+  Snapshots written   : ${totalSnapshots}
+  Trial reels updated : ${totalTrialUpdates}
+  New posts flagged   : ${totalFlagged}
+  Views gained today  : ${dayViews.toLocaleString()}
+  Errors / skipped    : ${totalErrors}
+  Finished            : ${new Date().toISOString()}
 `);
 }
 
