@@ -16,9 +16,12 @@ module.exports = {
   PROFILE_ACTOR: 'apify~instagram-profile-scraper',
   REELS_ACTOR: 'apify~instagram-scraper',
 
-  // How many recent reels to pull per account. Higher = more accurate view
-  // totals but more Apify credits. 30 covers roughly a month at 1/day.
-  REELS_LIMIT: 30,
+  // How many recent reels to pull PER ACCOUNT each run. Apify bills roughly
+  // $0.0024 per reel returned, so this is the main cost dial:
+  // 99 accounts at 10 reels is about $2.60 a run once accounts are mature.
+  // At 6 posts a day, 10 covers a full day with margin. Raising it just
+  // re-buys reels already stored in Airtable, every day.
+  REELS_LIMIT: 10,
 
   // Batching. Smaller batches + longer pauses = fewer empty results.
   BATCH_SIZE: 4,
