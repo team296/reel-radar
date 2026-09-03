@@ -14,6 +14,9 @@ const SNAPSHOT_FIELDS = [
   { name: 'Total Views', type: 'number', options: { precision: 0 } },
   { name: 'Views Delta', type: 'number', options: { precision: 0 } },
   { name: 'Flagged Posts Count', type: 'number', options: { precision: 0 } },
+  // Machine-readable {shortCode: views} for the reels seen this run. Used by
+  // the next run to compute a true per-reel views delta. Hide it in Airtable.
+  { name: 'Reel Views JSON', type: 'multilineText' },
   {
     name: 'Scraped At',
     type: 'dateTime',
