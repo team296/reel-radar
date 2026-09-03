@@ -12,9 +12,11 @@ module.exports = {
   SNAPSHOTS_TABLE_NAME: 'Daily Snapshots',
   FLAGGED_POSTS_TABLE_NAME: 'Flagged Posts',
 
-  // Two actors: profile for follower counts, general scraper for the reels tab.
+  // Two actors: profile for follower counts, and the dedicated reel scraper
+  // which reads the reels tab itself - works for accounts that hide reels
+  // from their grid, which the general scraper missed.
   PROFILE_ACTOR: 'apify~instagram-profile-scraper',
-  REELS_ACTOR: 'apify~instagram-scraper',
+  REELS_ACTOR: 'apify~instagram-reel-scraper',
 
   // How many recent reels to pull PER ACCOUNT each run. Apify bills roughly
   // $0.0024 per reel returned, so this is the main cost dial:
