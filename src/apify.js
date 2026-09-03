@@ -68,16 +68,17 @@ async function scrapeProfiles(usernames) {
   return byUser;
 }
 
-// The reels tab itself — /username/reels/ — which is where the real posts and
-// view counts live.
+// The dedicated reel scraper reads each account's reels tab directly, so it
+// sees reels even on accounts that hide them from the main grid.
 async function scrapeReels(usernames) {
   const items = await runActor(
     REELS_ACTOR,
     {
-      directUrls: usernames.map(u => `https://www.instagram.com/${u}/reels/`),
-      resultsType: 'posts',
+      username: usernames,
       resultsLimit: REELS_LIMIT,
-      addParentData: false,
+      // Pinned reels are usually old; without this they permanently occupy
+      // slots in the small per-account window.
+      skipPinnedPosts: true,
     },
     'reels'
   );
@@ -91,9 +92,10 @@ async function scrapeReels(usernames) {
     // Instagram returns views under either key depending on the post.
     const views = raw.videoPlayCount || raw.videoViewCount || 0;
 
+    const shortCode = raw.shortCode || raw.shortcode || '';
     byUser[name].push({
-      url: raw.url || (raw.shortCode ? `https://instagram.com/reel/${raw.shortCode}` : ''),
-      shortCode: raw.shortCode || '',
+      url: raw.url || raw.reelURL || (shortCode ? `https://instagram.com/reel/${shortCode}` : ''),
+      shortCode,
       views,
       likes: raw.likesCount || 0,
       comments: raw.commentsCount || 0,
