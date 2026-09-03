@@ -23,7 +23,7 @@ const todayISO = () => new Date().toISOString().split('T')[0];
 async function loadPreviousSnapshots() {
   const records = await listAll(SNAPSHOTS_TABLE_NAME, {
     filterByFormula: `IS_BEFORE({Date}, "${todayISO()}")`,
-    fields: ['Username', 'Date', 'Followers', 'Total Views', 'Scraped At'],
+    fields: ['Username', 'Date', 'Followers', 'Scraped At', 'Reel Views JSON'],
   });
 
   const map = {};
@@ -32,11 +32,15 @@ async function loadPreviousSnapshots() {
     if (!key) continue;
     const date = r.fields['Date'] || '';
     if (!map[key] || date > map[key].date) {
+      let reelViews = {};
+      try {
+        reelViews = JSON.parse(r.fields['Reel Views JSON'] || '{}');
+      } catch (e) { /* old rows have no JSON */ }
       map[key] = {
         date,
         followers: r.fields['Followers'] || 0,
-        totalViews: r.fields['Total Views'] || 0,
         scrapedAt: r.fields['Scraped At'] || null,
+        reelViews,
       };
     }
   }
@@ -188,7 +192,28 @@ async function main() {
     // Only compute a follower delta if we actually got a profile this run,
     // otherwise 0 followers would look like a huge drop.
     const followerDelta = hasProfile && prev ? followers - prev.followers : 0;
-    const viewsDelta = prev ? totalViews - prev.totalViews : 0;
+
+    // Views gained since the last scrape, computed PER REEL against the
+    // previous snapshot's {shortCode: views} map:
+    //   - reel seen before: count only the increase
+    //   - reel not seen before (new post): count all its views
+    // Comparing totals across runs breaks whenever a reel slides out of the
+    // window, which at 6 posts/day is constantly - this doesn't.
+    const reelViewsNow = {};
+    let viewsDelta = 0;
+    for (const reel of reels) {
+      const code = reel.shortCode || reel.url;
+      if (!code) continue;
+      reelViewsNow[code] = reel.views;
+      const before = prev ? prev.reelViews[code] : undefined;
+      viewsDelta += before === undefined ? reel.views : Math.max(reel.views - before, 0);
+    }
+    // No previous JSON (first run after this change, or a brand-new account):
+    // the delta above is really "all views ever on tracked reels", which would
+    // inflate the day. Report 0 for that account instead and start clean.
+    if (prev && Object.keys(prev.reelViews).length === 0) {
+      viewsDelta = 0;
+    }
 
     // Flag only reels that hit the view threshold AND went up inside the
     // window. Both conditions, as specified: a big number on an old reel is
@@ -218,6 +243,7 @@ async function main() {
       'Total Views': totalViews,
       'Views Delta': viewsDelta,
       'Flagged Posts Count': hits.length,
+      'Reel Views JSON': JSON.stringify(reelViewsNow),
       'Scraped At': scrapedAt,
     };
     // Don't write follower fields at all if the profile scrape missed —
