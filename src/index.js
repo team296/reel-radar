@@ -349,6 +349,28 @@ async function main() {
   Newly flagged      : ${stats.flagged} (>= ${VIEWS_FLAG_THRESHOLD.toLocaleString()} views within ${FLAG_WINDOW_HOURS}h)
   Finished           : ${new Date().toISOString()}
 `);
+
+  // Fail loudly rather than exiting green on a run that saved nothing.
+  // Previously a total wipeout (expired Apify credits, revoked token, IG
+  // blocking everything) still finished successfully, so the only way to
+  // notice was to check Airtable by hand.
+  if (stats.saved === 0) {
+    throw new Error(
+      `No accounts saved out of ${accounts.length}. ` +
+      `Every scrape failed - check the batch errors above. ` +
+      `Common causes: Apify usage limit reached (403), invalid APIFY_TOKEN, ` +
+      `or Instagram blocking requests.`
+    );
+  }
+
+  // Partial failures are normal, but a majority failing means something
+  // systemic rather than a few private or empty accounts.
+  if (stats.saved < accounts.length / 2) {
+    throw new Error(
+      `Only ${stats.saved} of ${accounts.length} accounts saved. ` +
+      `More than half failed - treating as a failed run.`
+    );
+  }
 }
 
 main().catch(e => {
