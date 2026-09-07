@@ -12,6 +12,8 @@ const {
   RETRY_PAUSE_MS,
   VIEWS_FLAG_THRESHOLD,
   FLAG_WINDOW_HOURS,
+  REPLACE_AFTER_DAYS,
+  REPLACE_VIEWS_THRESHOLD,
 } = require('./config');
 
 const todayISO = () => new Date().toISOString().split('T')[0];
@@ -167,7 +169,7 @@ async function main() {
   const today = todayISO();
   const scrapedAt = new Date().toISOString();
 
-  const stats = { saved: 0, trial: 0, flagged: 0, empty: 0 };
+  const stats = { saved: 0, trial: 0, flagged: 0, empty: 0, replace: 0 };
   const snapshotRows = [];
   const flaggedRows = [];
   let emptyAccounts = [];
@@ -177,6 +179,31 @@ async function main() {
     const { acct, reels, followers, hasProfile } = result;
     const key = acct.username.toLowerCase();
     const prev = prevMap[key] || null;
+
+    // Oldest reel we have ever seen on this account: today's oldest vs the
+    // stored value; keep whichever is earlier. For accounts added to tracking
+    // while young, this is their true first post.
+    const oldestToday = reels.length
+      ? reels.reduce((min, r) => (r.postedAt && (!min || r.postedAt < min) ? r.postedAt : min), null)
+      : null;
+    let oldestReelDate = acct.oldestReelDate || null;
+    if (oldestToday && (!oldestReelDate || oldestToday < oldestReelDate)) {
+      oldestReelDate = oldestToday.split('T')[0];
+    }
+
+    // Age from Created Date when filled in by hand, else from the oldest reel.
+    const ageBasis = acct.createdDate || oldestReelDate;
+    const ageDays = daysSince(ageBasis);
+
+    // Best reel ever: monotonic max so it survives the sliding window.
+    const bestToday = reels.reduce((m, r) => Math.max(m, r.views), 0);
+    const bestReelViews = Math.max(acct.bestReelViews || 0, bestToday);
+
+    // Kill rule: old enough to judge, and nothing has ever worked.
+    const replaceAccount =
+      ageDays !== null &&
+      ageDays >= REPLACE_AFTER_DAYS &&
+      bestReelViews < REPLACE_VIEWS_THRESHOLD;
 
     const totalViews = reels.reduce((s, r) => s + r.views, 0);
 
@@ -230,7 +257,8 @@ async function main() {
       `(${followerDelta >= 0 ? '+' : ''}${followerDelta}), ` +
       `${reels.length} reels, ${totalViews} views ` +
       `(${viewsDelta >= 0 ? '+' : ''}${viewsDelta}), ` +
-      `${newReels} new${prev ? '' : ' [first run]'}`
+      `${newReels} new` +
+      `${replaceAccount ? ' [REPLACE]' : ''}${prev ? '' : ' [first run]'}`
     );
 
     const row = {
@@ -246,6 +274,7 @@ async function main() {
       'Reel Views JSON': JSON.stringify(reelViewsNow),
       'Scraped At': scrapedAt,
     };
+    if (ageDays !== null) row['Account Age (days)'] = ageDays;
     // Don't write follower fields at all if the profile scrape missed —
     // better a gap than a wrong number.
     if (hasProfile) {
@@ -273,7 +302,16 @@ async function main() {
     }
 
     stats.saved++;
-    return { recordId: acct.recordId, followers, hasProfile };
+    if (replaceAccount) stats.replace++;
+    return {
+      recordId: acct.recordId,
+      followers,
+      hasProfile,
+      ageDays,
+      oldestReelDate,
+      bestReelViews,
+      replaceAccount,
+    };
   }
 
   // --- main pass
@@ -355,11 +393,15 @@ async function main() {
   }
 
   for (const u of trialUpdates) {
-    if (u.recordId && u.hasProfile) {
-      if (await updateTrialReels(u.recordId, u.followers)) stats.trial++;
-    }
+    if (!u.recordId) continue;
+    const fields = { 'Replace Account': u.replaceAccount };
+    if (u.hasProfile) fields['trial reels enabled?'] = u.followers >= 200 ? 'yes' : 'no';
+    if (u.ageDays !== null) fields['Account Age'] = u.ageDays;
+    if (u.oldestReelDate) fields['Oldest Reel Date'] = u.oldestReelDate;
+    fields['Best Reel Views'] = u.bestReelViews;
+    if (await updatePostingRow(u.recordId, fields)) stats.trial++;
   }
-  console.log(`  ok ${stats.trial} trial-reels fields`);
+  console.log(`  ok ${stats.trial} posting rows updated`);
 
   const dayViews = snapshotRows.reduce(
     (s, r) => s + Math.max(r['Views Delta'] || 0, 0), 0
@@ -373,6 +415,7 @@ async function main() {
   New reels posted   : ${newReels}
   Views gained today : ${dayViews.toLocaleString()}
   Newly flagged      : ${stats.flagged} (>= ${VIEWS_FLAG_THRESHOLD.toLocaleString()} views within ${FLAG_WINDOW_HOURS}h)
+  Marked for replace : ${stats.replace} (>= ${REPLACE_AFTER_DAYS}d old, best reel < ${REPLACE_VIEWS_THRESHOLD})
   Finished           : ${new Date().toISOString()}
 `);
 
