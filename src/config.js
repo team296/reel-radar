@@ -39,4 +39,9 @@ module.exports = {
   // AND was posted within FLAG_WINDOW_HOURS. Both conditions must be true.
   VIEWS_FLAG_THRESHOLD: 10000,
   FLAG_WINDOW_HOURS: 24,
+
+  // Kill rule: tick 'Replace Account' on the posting row once an account is
+  // at least this old and no reel it has ever posted reached this many views.
+  REPLACE_AFTER_DAYS: 3,
+  REPLACE_VIEWS_THRESHOLD: 1000,
 };
