@@ -91,20 +91,25 @@ async function loadFlaggedUrls() {
   return set;
 }
 
-async function updateTrialReels(recordId, followers) {
+// Daily write-back to the posting row.
+async function updatePostingRow(recordId, fields) {
   try {
     await atFetch(`${encodeURIComponent(POSTING_TABLE_NAME)}/${recordId}`, {
       method: 'PATCH',
-      body: JSON.stringify({
-        fields: { 'trial reels enabled?': followers >= 200 ? 'yes' : 'no' },
-        typecast: true,
-      }),
+      body: JSON.stringify({ fields, typecast: true }),
     });
     return true;
   } catch (e) {
-    console.error(`  x trial reels (${recordId}): ${e.message}`);
+    console.error(`  x posting row update failed (${recordId}): ${e.message}`);
     return false;
   }
+}
+
+function daysSince(dateStr) {
+  if (!dateStr) return null;
+  const t = new Date(dateStr).getTime();
+  if (Number.isNaN(t)) return null;
+  return Math.max(Math.floor((Date.now() - t) / 86400000), 0);
 }
 
 // ------------------------------------------------------------------ scraping
