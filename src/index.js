@@ -63,6 +63,12 @@ async function loadAccounts() {
             username: String(raw).trim().replace('@', ''),
             source: viewName,
             recordId: r.id,
+            createdDate: r.fields['Created Date'] || null,
+            oldestReelDate: r.fields['Oldest Reel Date'] || null,
+            bestReelViews: r.fields['Best Reel Views'] || 0,
+            // Row-added date: age fallback for accounts with zero reels,
+            // which must still age toward the kill rule.
+            addedDate: r.createdTime || null,
           });
         }
       }
@@ -197,7 +203,7 @@ async function main() {
     }
 
     // Age from Created Date when filled in by hand, else from the oldest reel.
-    const ageBasis = acct.createdDate || oldestReelDate;
+    const ageBasis = acct.createdDate || oldestReelDate || acct.addedDate;
     const ageDays = daysSince(ageBasis);
 
     // Best reel ever: monotonic max so it survives the sliding window.
