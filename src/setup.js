@@ -1,5 +1,5 @@
 const { listTables, createTable, createField } = require('./airtable');
-const { SNAPSHOTS_TABLE_NAME, FLAGGED_POSTS_TABLE_NAME } = require('./config');
+const { SNAPSHOTS_TABLE_NAME, FLAGGED_POSTS_TABLE_NAME, POSTING_TABLE_NAME } = require('./config');
 
 const SNAPSHOT_FIELDS = [
   { name: 'Snapshot ID', type: 'singleLineText' },
@@ -14,6 +14,7 @@ const SNAPSHOT_FIELDS = [
   { name: 'Total Views', type: 'number', options: { precision: 0 } },
   { name: 'Views Delta', type: 'number', options: { precision: 0 } },
   { name: 'Flagged Posts Count', type: 'number', options: { precision: 0 } },
+  { name: 'Account Age (days)', type: 'number', options: { precision: 0 } },
   // Machine-readable {shortCode: views} for the reels seen this run. Used by
   // the next run to compute a true per-reel views delta. Hide it in Airtable.
   { name: 'Reel Views JSON', type: 'multilineText' },
@@ -76,11 +77,29 @@ async function ensureTable(tableName, wantedFields, existingTables) {
   }
 }
 
+// Fields the tracker maintains on the existing posting table.
+// 'Created Date' is filled in BY HAND when an account is added; the script
+// only reads it. 'Account Age' is written by the script daily.
+const POSTING_FIELDS = [
+  { name: 'Created Date', type: 'date', options: { dateFormat: { name: 'iso' } } },
+  { name: 'Account Age', type: 'number', options: { precision: 0 } },
+  // Set by the script from the earliest reel it has ever seen on the account;
+  // only ever moves earlier. Used as the age basis when Created Date is blank.
+  { name: 'Oldest Reel Date', type: 'date', options: { dateFormat: { name: 'iso' } } },
+  // Highest view count any reel on the account has ever reached. Only goes up,
+  // so it survives reels sliding out of the 10-reel scrape window.
+  { name: 'Best Reel Views', type: 'number', options: { precision: 0 } },
+  // Ticked when the kill rule fires: age >= REPLACE_AFTER_DAYS and
+  // Best Reel Views < REPLACE_VIEWS_THRESHOLD. Filter on this for the kill list.
+  { name: 'Replace Account', type: 'checkbox', options: { icon: 'xCheckbox', color: 'redBright' } },
+];
+
 async function ensureTables() {
   console.log('Checking Airtable tables...');
   const tables = await listTables();
   await ensureTable(SNAPSHOTS_TABLE_NAME, SNAPSHOT_FIELDS, tables);
   await ensureTable(FLAGGED_POSTS_TABLE_NAME, FLAGGED_FIELDS, tables);
+  await ensureTable(POSTING_TABLE_NAME, POSTING_FIELDS, tables);
 }
 
 module.exports = { ensureTables };
