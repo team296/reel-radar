@@ -23,7 +23,7 @@ module.exports = {
   // 99 accounts at 10 reels is about $2.60 a run once accounts are mature.
   // At 6 posts a day, 10 covers a full day with margin. Raising it just
   // re-buys reels already stored in Airtable, every day.
-  REELS_LIMIT: 10,
+  REELS_LIMIT: 100,
 
   // Batching. Smaller batches + longer pauses = fewer empty results.
   BATCH_SIZE: 4,
