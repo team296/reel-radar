@@ -83,6 +83,7 @@ async function ensureTable(tableName, wantedFields, existingTables) {
 const POSTING_FIELDS = [
   { name: 'Created Date', type: 'date', options: { dateFormat: { name: 'iso' } } },
   { name: 'Account Age', type: 'number', options: { precision: 0 } },
+  { name: 'Followers', type: 'number', options: { precision: 0 } },
   // Set by the script from the earliest reel it has ever seen on the account;
   // only ever moves earlier. Used as the age basis when Created Date is blank.
   { name: 'Oldest Reel Date', type: 'date', options: { dateFormat: { name: 'iso' } } },
