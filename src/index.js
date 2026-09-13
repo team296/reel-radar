@@ -18,6 +18,11 @@ const {
 
 const todayISO = () => new Date().toISOString().split('T')[0];
 
+// FOLLOWERS_ONLY=true skips the reels scrape entirely: updates followers,
+// trial-reels flag and age on the posting table, touches nothing else.
+// Costs a fraction of a full run. Snapshots/views/flagging are untouched.
+const FOLLOWERS_ONLY = String(process.env.FOLLOWERS_ONLY || '').toLowerCase() === 'true';
+
 // ---------------------------------------------------------------- Airtable in
 
 // Most recent snapshot per account from before today. Using "latest previous"
@@ -58,6 +63,11 @@ async function loadAccounts() {
       console.log(`  ${viewName}: ${records.length} accounts`);
       for (const r of records) {
         const raw = r.fields['username'] || r.fields['Username'];
+        // Skip accounts already binned or banned - no point paying to scrape
+        // them, and they'd wrongly count as active in the dashboard.
+        const decision = (r.fields['decision'] || '');
+        const status = (r.fields['status'] || '');
+        if (decision === 'bin' || status === 'bin' || status === 'Banned') continue;
         if (raw) {
           all.push({
             username: String(raw).trim().replace('@', ''),
@@ -132,10 +142,12 @@ async function scrapeBatch(batch) {
   }
 
   let reels = {};
-  try {
-    reels = await scrapeReels(usernames);
-  } catch (e) {
-    console.error(`  x reels scrape: ${e.message}`);
+  if (!FOLLOWERS_ONLY) {
+    try {
+      reels = await scrapeReels(usernames);
+    } catch (e) {
+      console.error(`  x reels scrape: ${e.message}`);
+    }
   }
 
   const results = [];
@@ -164,7 +176,7 @@ async function scrapeBatch(batch) {
 // --------------------------------------------------------------------- main
 
 async function main() {
-  console.log(`\n=== IG Tracker - ${new Date().toISOString()} ===\n`);
+  console.log(`\n=== IG Tracker${FOLLOWERS_ONLY ? ' (followers only)' : ''} - ${new Date().toISOString()} ===\n`);
 
   await ensureTables();
 
@@ -292,7 +304,7 @@ async function main() {
       row['Followers'] = followers;
       row['Follower Delta'] = followerDelta;
     }
-    snapshotRows.push(row);
+    if (!FOLLOWERS_ONLY) snapshotRows.push(row);
 
     for (const reel of hits) {
       if (!reel.url || flaggedUrls.has(reel.url)) continue;
@@ -312,8 +324,12 @@ async function main() {
       stats.flagged++;
     }
 
-    stats.saved++;
-    if (replaceAccount) stats.replace++;
+    if (!FOLLOWERS_ONLY) {
+      stats.saved++;
+      if (replaceAccount) stats.replace++;
+    } else {
+      stats.saved++;
+    }
     return {
       recordId: acct.recordId,
       followers,
@@ -405,14 +421,18 @@ async function main() {
 
   for (const u of trialUpdates) {
     if (!u.recordId) continue;
-    const fields = { 'Replace Account': u.replaceAccount };
+    const fields = {};
     if (u.hasProfile) {
       fields['trial reels enabled?'] = u.followers >= 200 ? 'yes' : 'no';
       fields['Followers'] = u.followers;
     }
     if (u.ageDays !== null) fields['Account Age'] = u.ageDays;
-    if (u.oldestReelDate) fields['Oldest Reel Date'] = u.oldestReelDate;
-    fields['Best Reel Views'] = u.bestReelViews;
+    if (!FOLLOWERS_ONLY) {
+      fields['Replace Account'] = u.replaceAccount;
+      if (u.oldestReelDate) fields['Oldest Reel Date'] = u.oldestReelDate;
+      fields['Best Reel Views'] = u.bestReelViews;
+    }
+    if (Object.keys(fields).length === 0) continue;
     if (await updatePostingRow(u.recordId, fields)) stats.trial++;
   }
   console.log(`  ok ${stats.trial} posting rows updated`);
