@@ -406,7 +406,10 @@ async function main() {
   for (const u of trialUpdates) {
     if (!u.recordId) continue;
     const fields = { 'Replace Account': u.replaceAccount };
-    if (u.hasProfile) fields['trial reels enabled?'] = u.followers >= 200 ? 'yes' : 'no';
+    if (u.hasProfile) {
+      fields['trial reels enabled?'] = u.followers >= 200 ? 'yes' : 'no';
+      fields['Followers'] = u.followers;
+    }
     if (u.ageDays !== null) fields['Account Age'] = u.ageDays;
     if (u.oldestReelDate) fields['Oldest Reel Date'] = u.oldestReelDate;
     fields['Best Reel Views'] = u.bestReelViews;
